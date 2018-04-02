@@ -4,12 +4,13 @@ import sys
 import glob
 import os
 from astropy.io import fits, ascii
+from astropy.table import Table
 import pandas as pd
 import scipy.signal as sig
 from math import *
 
 
-def average_fits(name_mask, dir_name='./', return_data=False, name=None):
+def average_fits(name_mask, return_data=False, dir_name='./', name=None):
     """Average several fits images.
 
     Take an array of fits images and apply numpy.mean to it.
@@ -39,7 +40,7 @@ def average_fits(name_mask, dir_name='./', return_data=False, name=None):
     res_data = np.mean(all_data, axis=0)
     if (not name):
         new_header = fits.getheader(list_of_names[0])
-        name = new_header['TARNAME'] + '_' + new_header['UPPER'] + '_' + new_header['CURALT'] + '.fits'
+        name = new_header['TARNAME'] + '_' + new_header['UPPER'] + '.fits'
         if (list_of_names[0].upper().count('SKY')):
             name = 'SKY_' + name
     if (return_data):
@@ -50,7 +51,7 @@ def average_fits(name_mask, dir_name='./', return_data=False, name=None):
         return name
 
 
-def extract_spectrum(file_name, band):
+def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None):
     """Extract spectrum from ASTRONIRCAM spectrograph image.
 
     Open fits file with data from ASTRONIRCAM. Fit curve with spectrum
@@ -68,10 +69,9 @@ def extract_spectrum(file_name, band):
 
     Returns
     -------
-    wavelenght : ndarray
-        Float array of wavelenghts.
-    sum_obs : ndarray
-        Array of summarized flux for each represented wavelenght.
+    specrum : ndarray
+        First row is an array of wavelenghts, second is an array of
+        fluxes corresponded to each wavelenght.
     """
     band = band.upper()
     obs = fits.getdata(file_name)
@@ -96,7 +96,29 @@ def extract_spectrum(file_name, band):
     x = np.array(np.polyval(c, y), dtype=int)
     sum_obs = np.array(list(map(lambda a, b: np.ma.sum(obs[a, b:b + dx]), y, x)))
     wavelenght = np.polyval(p, y)
-    return wavelenght, sum_obs
+    spectrum = [wavelenght, sum_obs]
+    if return_data:
+        return np.array(spectrum)
+    else:
+        table = Table(spectrum, names=('wavelenght', 'flux'))
+        hdr = fits.getheader(file_name)
+        hdr['BAND'] = band
+        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + hdr['TARNAME'] + '_' + band + '.fits')
+        return name
+
+
+def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
+    data_header = fits.getheader(file_name)
+    if data_header['UPPER'].count('YJ'):
+        Y_spectra = extract_spectrum(file_name, 'Y', return_data=return_data, dir_name=dir_name)
+        J_spectra = extract_spectrum(file_name, 'J', return_data=return_data, dir_name=dir_name)
+    elif data_header['UPPER'].count('HK'):
+        H_spectra = extract_spectrum(file_name, 'H', return_data=return_data, dir_name=dir_name)
+        K_spectra = extract_spectrum(file_name, 'K', return_data=return_data, dir_name=dir_name)
+    else:
+        print("Can't find mentiond band in the name of file.")
+        sys.exit(1)
+    return None
 
 
 def get_magnitudes(hip_id, catalogue='./A0V.csv'):
@@ -115,9 +137,10 @@ def main(args):
     # # We do not need last 4 parts of name
     files_mask = set(list(map(lambda x: '-'.join(x.split('-')[:-4]) + '*',
                               files)))
-    print(list(map(average_fits, list(files_mask))))
+    mean_raw = list(map(average_fits, list(files_mask)))
+    print(mean_raw)
 
-    extract_spectrum(args[1], args[2])
+    extract_spectrum(args[1], args[2], return_data=False)
     return 0
 
 
