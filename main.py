@@ -41,8 +41,10 @@ def average_fits(name_mask, return_data=False, dir_name='./', name=None):
     if (not name):
         new_header = fits.getheader(list_of_names[0])
         name = new_header['TARNAME'] + '_' + new_header['UPPER'] + '.fits'
+        new_header['SKY'] = 'No'
         if (list_of_names[0].upper().count('SKY')):
             name = 'SKY_' + name
+            new_header['SKY'] = 'Yes'
     if (return_data):
         return {name: res_data}
     else:
@@ -103,7 +105,10 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         table = Table(spectrum, names=('wavelenght', 'flux'))
         hdr = fits.getheader(file_name)
         hdr['BAND'] = band
-        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + hdr['TARNAME'] + '_' + band + '.fits')
+        name = hdr['TARNAME'] + '_' + band + '.fits'
+        if file_name.upper().count('SKY'):
+            name = 'SKY_' + name
+        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name)
         return name
 
 
@@ -112,13 +117,14 @@ def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
     if data_header['UPPER'].count('YJ'):
         Y_spectra = extract_spectrum(file_name, 'Y', return_data=return_data, dir_name=dir_name)
         J_spectra = extract_spectrum(file_name, 'J', return_data=return_data, dir_name=dir_name)
+        return [Y_spectra, J_spectra]
     elif data_header['UPPER'].count('HK'):
         H_spectra = extract_spectrum(file_name, 'H', return_data=return_data, dir_name=dir_name)
         K_spectra = extract_spectrum(file_name, 'K', return_data=return_data, dir_name=dir_name)
+        return [H_spectra, K_spectra]
     else:
-        print("Can't find mentiond band in the name of file.")
+        print("Can't find mentiond band in the UPPER string of the header of the file.")
         sys.exit(1)
-    return None
 
 
 def get_magnitudes(hip_id, catalogue='./A0V.csv'):
@@ -126,10 +132,37 @@ def get_magnitudes(hip_id, catalogue='./A0V.csv'):
     hip_id = str(hip_id).lower()
     if hip_id.isnumeric():
         hip_id = 'hip' + hip_id
-    star = cat.loc[cat['HIP_ID_STR'] == name.lower()]
+    star = cat.loc[cat['HIP_ID_STR'] == hip_id]
     magnitudes = {'J': star['FLUX_J'].values[0], 'H': star['FLUX_H'].values[0],
                   'K': star['FLUX_K'].values[0]}
     return magnitudes
+
+
+def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=None):
+    spec = fits.open(spec_name)[1].data
+    sky = fits.open(sky_name)[1].data
+    data = spec.field(1) - sky.field(1)
+    data[data < 0] = 0
+    data = sig.medfilt(data, 5)
+    data = sig.wiener(data, 10)
+    hdr = fits.getheader(spec_name, 1)
+    band = hdr['BAND']
+    if band == 'Y':
+        band = 'J'
+    mag = get_magnitudes(hdr['TARNAME'])[band]
+    data = data * 100 ** (0.2 * (mag - 5.0))
+    spectrum = [spec.field(0), data]
+    if return_data:
+        return spectrum
+    else:
+        table = Table(spectrum, names=('wavelenght', 'flux'))
+        name = hdr['TARNAME'] + '_' + hdr['BAND'] + '_CLEAR.fits'
+        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name)
+        return name
+
+
+def clear_spectra(list_of_names):
+    return None
 
 
 def main(args):
@@ -140,7 +173,8 @@ def main(args):
     mean_raw = list(map(average_fits, list(files_mask)))
     print(mean_raw)
 
-    extract_spectrum(args[1], args[2], return_data=False)
+    spectra = list(map(extract_spectra, mean_raw))
+    print(spectra)
     return 0
 
 
