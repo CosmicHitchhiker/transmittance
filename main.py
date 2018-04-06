@@ -8,6 +8,7 @@ from astropy.table import Table
 import pandas as pd
 import scipy.signal as sig
 from math import *
+import re
 
 
 def average_fits(name_mask, return_data=False, dir_name='./', name=None):
@@ -49,7 +50,7 @@ def average_fits(name_mask, return_data=False, dir_name='./', name=None):
         return {name: res_data}
     else:
         name = dir_name + name
-        fits.writeto(name, res_data, header=new_header)
+        fits.writeto(name, res_data, header=new_header, overwrite=True)
         return name
 
 
@@ -94,7 +95,6 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         print("Band must be Y,J,H or K (but not ", band, ")!")
         sys.exit(1)
     y = np.arange(20, 2020, dtype=int)
-    print(c)
     x = np.array(np.polyval(c, y), dtype=int)
     sum_obs = np.array(list(map(lambda a, b: np.ma.sum(obs[a, b:b + dx]), y, x)))
     wavelenght = np.polyval(p, y)
@@ -108,7 +108,7 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         name = hdr['TARNAME'] + '_' + band + '.fits'
         if file_name.upper().count('SKY'):
             name = 'SKY_' + name
-        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name)
+        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name, overwrite=True)
         return name
 
 
@@ -127,7 +127,7 @@ def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
         sys.exit(1)
 
 
-def get_magnitudes(hip_id, catalogue='./A0V.csv'):
+def get_magnitudes(hip_id, catalogue='~/Documents/atm-tran/transmittance/A0V.csv'):
     cat = pd.read_csv(catalogue, sep='\s+')
     hip_id = str(hip_id).lower()
     if hip_id.isnumeric():
@@ -157,12 +157,85 @@ def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=N
     else:
         table = Table(spectrum, names=('wavelenght', 'flux'))
         name = hdr['TARNAME'] + '_' + hdr['BAND'] + '_CLEAR.fits'
-        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name)
+        fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name, overwrite=True)
         return name
 
 
 def clear_spectra(list_of_names):
-    return None
+    all = set(list_of_names)
+    r = re.compile('.*SKY.*')
+    sky = set(filter(r.match, list_of_names))
+    stars = list(all - sky)
+    sky = list(sky)
+    stars.sort()
+    sky.sort()
+    res = list(map(clear_spectrum, stars, sky))
+    return res
+
+
+def airmass(zt):
+    c = np.cos(np.radians(zt))
+    k = [1.002432, 0.148386, 0.0096467, 0.149864, 0.0102963, 0.000303978]
+    return ((k[0] * c ** 2 + k[1] * c + k[2]) / (c ** 3 + k[3] * c ** 2 + k[4] * c + k[5]))
+
+
+def corr2(a, b, mmv=10):
+    ''' len(a) shouldn't be less than len(b) '''
+    b = b[mmv: -mmv]
+    move = np.argmax(np.correlate(a, b))
+    return move
+
+
+def max_corr(data, mv=10):
+    ''' Returns corellated data, number of reference line and ref movement
+        data - 1-D lines of numbers (y-values with the same x[0])
+        mv - maximum movement, every line will loose at least 2*mmv elemets
+    '''
+    len_data = list(map(len, data))
+    i_ref = np.argmax(len_data)
+    ref_data = data[i_ref]
+    del data[i_ref]
+    move = np.array(list(map(lambda x: corr2(ref_data, x, mmv=mv), data)))
+    ref_move = np.max(move)
+    move = (move * (-1) + ref_move).tolist()
+    data = list(map(lambda x: x[mv:-mv], data))
+    data.insert(i_ref, ref_data)
+    move.insert(i_ref, ref_move)
+    data = list(map(lambda x, y: x[y:], data, move))
+    max_len = np.min(list(map(len, data)))
+    data = np.array(list(map(lambda x: x[:max_len], data)))
+    return data, i_ref, ref_move
+
+
+def transmission(data, M):
+    data = np.log((data / data[0])[1:])
+    M = np.array([(M - M[0])[1:]])
+    k = np.linalg.lstsq(M.T, data, rcond=None)[0]
+    return k
+
+
+def get_transmittance(args):
+    # Load all spectra
+    all_data = list(map(lambda x: fits.open(x)[1], args))
+    data = list(map(lambda x: x.data.field(1), all_data))
+    # Cut all spectra to universal beginning)
+    data, i_ref, ref_move = max_corr(data)
+    wl = (all_data[i_ref].data.field(0))[ref_move: np.shape(data)[1] + ref_move]
+    h = np.array(list(map(lambda x: x.header['CURALT'], all_data)))
+    M = airmass(90 - h)
+    p = np.exp(transmission(data, M)).T
+    for i in range(len(args)):
+        plt.plot(wl, data[i], label=M[i])
+    plt.plot(wl, p)
+    print(p)
+    plt.legend()
+    plt.show()
+    return(np.array([wl, p.flatten()]))
+
+
+def get_all_transmittance(filenames):
+    r = re.compile('.*_K_.*')
+    Y = get_transmittance(list(filter(r.match, filenames)))
 
 
 def main(args):
@@ -173,8 +246,13 @@ def main(args):
     mean_raw = list(map(average_fits, list(files_mask)))
     print(mean_raw)
 
-    spectra = list(map(extract_spectra, mean_raw))
+    spectra = (np.array(list(map(extract_spectra, mean_raw))).flatten()).tolist()
     print(spectra)
+
+    clean = clear_spectra(spectra)
+    print(clean)
+
+    get_all_transmittance(clean)
     return 0
 
 
