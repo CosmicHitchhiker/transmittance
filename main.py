@@ -127,7 +127,7 @@ def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
         sys.exit(1)
 
 
-def get_magnitudes(hip_id, catalogue='~/Documents/atm-tran/transmittance/A0V.csv'):
+def get_magnitudes(hip_id, catalogue='~/Documents/SAI/atm-tran/transmittance/A0V.csv'):
     cat = pd.read_csv(catalogue, sep='\s+')
     hip_id = str(hip_id).lower()
     if hip_id.isnumeric():
@@ -148,8 +148,9 @@ def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=N
     hdr = fits.getheader(spec_name, 1)
     band = hdr['BAND']
     if band == 'Y':
-        band = 'J'
-    mag = get_magnitudes(hdr['TARNAME'])[band]
+        mag = get_magnitudes(hdr['TARNAME'])['J']
+    else:
+        mag = get_magnitudes(hdr['TARNAME'])[band]
     data = data * 100 ** (0.2 * (mag - 5.0))
     spectrum = [spec.field(0), data]
     if return_data:
@@ -208,7 +209,8 @@ def max_corr(data, mv=10):
 
 
 def transmission(data, M):
-    data = np.log((data / data[0])[1:])
+    data = np.log((data / data[0])[1:])  #
+    print(data[0])
     M = np.array([(M - M[0])[1:]])
     k = np.linalg.lstsq(M.T, data, rcond=None)[0]
     return k
@@ -224,23 +226,19 @@ def get_transmittance(args):
     h = np.array(list(map(lambda x: x.header['CURALT'], all_data)))
     M = airmass(90 - h)
     p = np.exp(transmission(data, M)).T
-    for i in range(len(args)):
-        plt.plot(wl, data[i], label=M[i])
     plt.plot(wl, p)
-    print(p)
-    plt.legend()
     plt.show()
     return(np.array([wl, p.flatten()]))
 
 
 def get_all_transmittance(filenames):
-    r = re.compile('.*_K_.*')
+    r = re.compile('.*_Y_.*')
     Y = get_transmittance(list(filter(r.match, filenames)))
 
 
 def main(args):
     files = glob.glob(sys.argv[1] + "*.fts")
-    # # We do not need last 4 parts of name
+    # We do not need last 4 parts of name
     files_mask = set(list(map(lambda x: '-'.join(x.split('-')[:-4]) + '*',
                               files)))
     mean_raw = list(map(average_fits, list(files_mask)))
