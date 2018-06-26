@@ -38,15 +38,16 @@ def average_fits(name_mask, return_data=False, dir_name='./', name=None):
         when return_data is True)
     """
     list_of_names = glob.glob(name_mask)
+    # 3D array with image as every 2D component
     all_data = np.array(list(map(lambda x: fits.getdata(x), list_of_names)))
+    # Averaged 2D image
     res_data = np.mean(all_data, axis=0)
-    if (not name):
+    if (not name):      # Create name if not mentioned
+        # Result header is equal to the header of fitrst file
         new_header = fits.getheader(list_of_names[0])
         name = new_header['TARNAME'] + '_' + new_header['UPPER'] + '.fits'
-        new_header['SKY'] = 'No'
         if (list_of_names[0].upper().count('SKY')):
             name = 'SKY_' + name
-            new_header['SKY'] = 'Yes'
     if (return_data):
         return {name: res_data}
     else:
@@ -309,10 +310,11 @@ def main(args):
     spectra = (np.array(list(map(extract_spectra, mean_raw))).flatten()).tolist()
     # print(spectra)
 
-    # Remove noise, sky and normalize spectra ()
+    # Remove noise, sky and normalize spectra
     clean = clear_spectra(spectra)
     # print(clean)
 
+    # Get transmittance for every band
     get_all_transmittance(clean)
     return 0
 
