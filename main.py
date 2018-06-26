@@ -166,48 +166,62 @@ def get_magnitudes(hip_id, catalogue='~/Documents/SAI/atm-tran/transmittance/A0V
 
 
 def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=None):
+    # Borders for every band
     Y_band = [0.95, 1.3]
     J_band = [1.15, 1.35]
     H_band = [1.50, 1.80]
     K_band = [1.95, 2.40]
     borders = {'Y': Y_band, 'J': J_band, 'H': H_band, 'K': K_band}
-    spec = fits.open(spec_name)[1].data
-    sky = fits.open(sky_name)[1].data
-    data = spec.field(1) - sky.field(1)
+
+    spec = fits.open(spec_name)[1].data     # Spectra of star
+    sky = fits.open(sky_name)[1].data       # Spectra of sky
+    data = spec.field(1) - sky.field(1)     # Just remove sky from star spectrum
     wavelenghts = spec.field(0)
-    data[data < 0] = 0
-    data = sig.medfilt(data, 5)
-    data = sig.wiener(data, 10)
+    data[data < 0] = 0          # Remove negative values
+    data = sig.medfilt(data, 5)         # Simple median filter
+    data = sig.wiener(data, 10)         # Wiener filter (removes sharp noise)
+
+    # Nomalize spectrum according to the band, mentioned in header
+    # Magnitude for this star must be written in A0V catalogue file`
     hdr = fits.getheader(spec_name, 1)
     band = hdr['BAND']
     if band == 'Y':
         mag = get_magnitudes(hdr['TARNAME'])['J']
     else:
         mag = get_magnitudes(hdr['TARNAME'])[band]
+    # Let this star have magnitude equal to 5!
     data = data * 100 ** (0.2 * (mag - 5.0))
+
+    # Cut spectrum
     data = data[wavelenghts > borders[band][0]]
     wavelenghts = wavelenghts[wavelenghts > borders[band][0]]
     data = data[wavelenghts < borders[band][1]]
     wavelenghts = wavelenghts[wavelenghts < borders[band][1]]
+
+    # Write spectrum as a "list" structure
     spectrum = [wavelenghts, data]
     if return_data:
+        # return list with wavelenghts in the first position and normalized flux in the second
         return spectrum
     else:
+        # Create fits table with wavelenghts and coresponding flux
         table = Table(spectrum, names=('wavelenght', 'flux'))
+        # Name is <TARNAME>_<BAND>_CLEAR.fits (for example "HIP007_Y_CLEAR.fits")
         name = hdr['TARNAME'] + '_' + hdr['BAND'] + '_CLEAR.fits'
         fits.BinTableHDU(data=table, header=hdr).writeto(dir_name + name, overwrite=True)
+        # Return name of the created fits
         return name
 
 
 def clear_spectra(list_of_names):
-    all = set(list_of_names)
+    all = set(list_of_names)        # Names of both sky and stars spectra
     r = re.compile('.*SKY.*')
-    sky = set(filter(r.match, list_of_names))
-    stars = list(all - sky)
+    sky = set(filter(r.match, list_of_names))   # Only names of sky spectra
+    stars = list(all - sky)         # Only names of stars spectra
     sky = list(sky)
-    stars.sort()
-    sky.sort()
-    res = list(map(clear_spectrum, stars, sky))
+    stars.sort()        # Sort both of name lists
+    sky.sort()          # To make index of sky and star specrum of same object (in same band)
+    res = list(map(clear_spectrum, stars, sky))     # Get clean spectrum for every star in every band
     return res
 
 
@@ -282,16 +296,20 @@ def get_all_transmittance(filenames):
 
 
 def main(args):
+    # Take all "fts" files from the mentioned directory
     files = glob.glob(sys.argv[1] + "*.fts")
     # We do not need last 4 parts of name
     files_mask = set(list(map(lambda x: '-'.join(x.split('-')[:-4]) + '*',
                               files)))
+    # Get mean fits for every object
     mean_raw = list(map(average_fits, list(files_mask)))
     # print(mean_raw)
 
+    # Extract all spectra for every object
     spectra = (np.array(list(map(extract_spectra, mean_raw))).flatten()).tolist()
     # print(spectra)
 
+    # Remove noise, sky and normalize spectra ()
     clean = clear_spectra(spectra)
     # print(clean)
 
