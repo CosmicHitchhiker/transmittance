@@ -9,6 +9,7 @@ import pandas as pd
 import scipy.signal as sig
 from math import *
 import re
+from scipy.ndimage.interpolation import shift
 
 
 def average_fits(name_mask, return_data=False, dir_name='./', name=None):
@@ -25,7 +26,7 @@ def average_fits(name_mask, return_data=False, dir_name='./', name=None):
     return_data : bool, optional
         If True, return the resulting array instead of writing into file.
     name : string, optional
-        Prefered name for result.
+        Prefered name for the result.
 
 
     Returns
@@ -69,12 +70,21 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         Path to file
     band : string
         Must be 'Y', 'J', 'H' or 'K'
+    dir_name : string, optional
+        Name of directory to write result in. Default is './'
+    return_data : bool, optional
+        If True, return the resulting array instead of writing into file.
+    name : string, optional
+        Prefered name for the result.
 
     Returns
     -------
     specrum : ndarray
         First row is an array of wavelenghts, second is an array of
-        fluxes corresponded to each wavelenght.
+        fluxes corresponded to each wavelenght. (Returned when return_data
+        is True)
+    name : string
+        Name of generated fits file. (Returned when return_data is False)
     """
     band = band.upper()
     obs = fits.getdata(file_name)
@@ -113,6 +123,23 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
 
 
 def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
+    """Extract spectra from ASTRONIRCAM fits image.
+
+    Apply extract_spectra to both of the bands existing on an image.
+
+    Parameters
+    ----------
+    file_name : string
+        Path to file
+    band : string
+        Must be 'Y', 'J', 'H' or 'K'
+
+    Returns
+    -------
+    specrum : ndarray
+        First row is an array of wavelenghts, second is an array of
+        fluxes corresponded to each wavelenght.
+    """
     data_header = fits.getheader(file_name)
     if data_header['UPPER'].count('YJ'):
         Y_spectra = extract_spectrum(file_name, 'Y', return_data=return_data, dir_name=dir_name)
@@ -123,7 +150,7 @@ def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
         K_spectra = extract_spectrum(file_name, 'K', return_data=return_data, dir_name=dir_name)
         return [H_spectra, K_spectra]
     else:
-        print("Can't find mentiond band in the UPPER string of the header of the file.")
+        # print("Can't find mentiond band in the UPPER string of the header of the file.")
         sys.exit(1)
 
 
@@ -139,9 +166,15 @@ def get_magnitudes(hip_id, catalogue='~/Documents/SAI/atm-tran/transmittance/A0V
 
 
 def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=None):
+    Y_band = [0.95, 1.3]
+    J_band = [1.15, 1.35]
+    H_band = [1.50, 1.80]
+    K_band = [1.95, 2.40]
+    borders = {'Y': Y_band, 'J': J_band, 'H': H_band, 'K': K_band}
     spec = fits.open(spec_name)[1].data
     sky = fits.open(sky_name)[1].data
     data = spec.field(1) - sky.field(1)
+    wavelenghts = spec.field(0)
     data[data < 0] = 0
     data = sig.medfilt(data, 5)
     data = sig.wiener(data, 10)
@@ -152,7 +185,11 @@ def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=N
     else:
         mag = get_magnitudes(hdr['TARNAME'])[band]
     data = data * 100 ** (0.2 * (mag - 5.0))
-    spectrum = [spec.field(0), data]
+    data = data[wavelenghts > borders[band][0]]
+    wavelenghts = wavelenghts[wavelenghts > borders[band][0]]
+    data = data[wavelenghts < borders[band][1]]
+    wavelenghts = wavelenghts[wavelenghts < borders[band][1]]
+    spectrum = [wavelenghts, data]
     if return_data:
         return spectrum
     else:
@@ -192,8 +229,10 @@ def max_corr(data, mv=10):
         data - 1-D lines of numbers (y-values with the same x[0])
         mv - maximum movement, every line will loose at least 2*mmv elemets
     '''
-    len_data = list(map(len, data))
-    i_ref = np.argmax(len_data)
+
+    len_data = list(map(len, data))     # Делаем массив длин
+    print("len:" + str(len_data))
+    i_ref = np.argmax(len_data)         # Получаем номер опорного массива (с наибольшим количеством) элементов
     ref_data = data[i_ref]
     del data[i_ref]
     move = np.array(list(map(lambda x: corr2(ref_data, x, mmv=mv), data)))
@@ -209,8 +248,7 @@ def max_corr(data, mv=10):
 
 
 def transmission(data, M):
-    data = np.log((data / data[0])[1:])  #
-    print(data[0])
+    data = np.log((data / data[0])[1:])
     M = np.array([(M - M[0])[1:]])
     k = np.linalg.lstsq(M.T, data, rcond=None)[0]
     return k
@@ -220,20 +258,27 @@ def get_transmittance(args):
     # Load all spectra
     all_data = list(map(lambda x: fits.open(x)[1], args))
     data = list(map(lambda x: x.data.field(1), all_data))
-    # Cut all spectra to universal beginning)
-    data, i_ref, ref_move = max_corr(data)
-    wl = (all_data[i_ref].data.field(0))[ref_move: np.shape(data)[1] + ref_move]
+    # Cut all spectra to universal beginning
+    # data, i_ref, ref_move = max_corr(data)
+    # wl = (all_data[i_ref].data.field(0))[ref_move: np.shape(data)[1] + ref_move]
+    wl = all_data[0].data.field(0)
     h = np.array(list(map(lambda x: x.header['CURALT'], all_data)))
     M = airmass(90 - h)
     p = np.exp(transmission(data, M)).T
-    plt.plot(wl, p)
-    plt.show()
     return(np.array([wl, p.flatten()]))
 
 
 def get_all_transmittance(filenames):
     r = re.compile('.*_Y_.*')
     Y = get_transmittance(list(filter(r.match, filenames)))
+    r = re.compile('.*_J_.*')
+    J = get_transmittance(list(filter(r.match, filenames)))
+    r = re.compile('.*_H_.*')
+    H = get_transmittance(list(filter(r.match, filenames)))
+    r = re.compile('.*_K_.*')
+    K = get_transmittance(list(filter(r.match, filenames)))
+    a = list(map(lambda x: plt.plot(x[0], x[1]), [Y, J, H, K]))
+    plt.show()
 
 
 def main(args):
@@ -242,13 +287,13 @@ def main(args):
     files_mask = set(list(map(lambda x: '-'.join(x.split('-')[:-4]) + '*',
                               files)))
     mean_raw = list(map(average_fits, list(files_mask)))
-    print(mean_raw)
+    # print(mean_raw)
 
     spectra = (np.array(list(map(extract_spectra, mean_raw))).flatten()).tolist()
-    print(spectra)
+    # print(spectra)
 
     clean = clear_spectra(spectra)
-    print(clean)
+    # print(clean)
 
     get_all_transmittance(clean)
     return 0
