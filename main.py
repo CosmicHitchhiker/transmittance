@@ -21,10 +21,10 @@ def average_fits(name_mask, return_data=False, dir_name='./', name=None):
     ----------
     name_mask : string
         Mask for glob function to get names of fits files.
-    dir_name : string, optional
-        Name of directory to write result in. Default is './'
     return_data : bool, optional
         If True, return the resulting array instead of writing into file.
+    dir_name : string, optional
+        Name of directory to write result in. Default is './'
     name : string, optional
         Prefered name for the result.
 
@@ -71,10 +71,10 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         Path to file
     band : string
         Must be 'Y', 'J', 'H' or 'K'
-    dir_name : string, optional
-        Name of directory to write result in. Default is './'
     return_data : bool, optional
         If True, return the resulting array instead of writing into file.
+    dir_name : string, optional
+        Name of directory to write result in. Default is './'
     name : string, optional
         Prefered name for the result.
 
@@ -87,9 +87,11 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
     name : string
         Name of generated fits file. (Returned when return_data is False)
     """
-    band = band.upper()
+    band = band.upper()     # To avoid errors in letter size
     obs = fits.getdata(file_name)
-    dx = 40
+    dx = 40         # Width of field to summarize
+    # c - coefficients for curve-fit equation
+    # p - coefficients for dispersional equation
     if band == 'Y':
         c = [2.3456E-6, 0.30176, 518.70]
         p = [7.6050E-15, -4.4590E-11, 1.0088E-7, 1.2629E-4, 0.90406]
@@ -107,8 +109,9 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         sys.exit(1)
     y = np.arange(20, 2020, dtype=int)
     x = np.array(np.polyval(c, y), dtype=int)
+    # summarize flux in significant pixels of necessary range
     sum_obs = np.array(list(map(lambda a, b: np.ma.sum(obs[a, b:b + dx]), y, x)))
-    wavelenght = np.polyval(p, y)
+    wavelenght = np.polyval(p, y)       # Transform y to lambda by dispersional equation
     spectrum = [wavelenght, sum_obs]
     if return_data:
         return np.array(spectrum)
@@ -123,17 +126,16 @@ def extract_spectrum(file_name, band, return_data=True, dir_name='./', name=None
         return name
 
 
-def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
+def extract_spectra(file_name):
     """Extract spectra from ASTRONIRCAM fits image.
 
-    Apply extract_spectra to both of the bands existing on an image.
+    Apply extract_spectra to both of the bands existing on an image (according
+    to the fits header information)
 
     Parameters
     ----------
     file_name : string
         Path to file
-    band : string
-        Must be 'Y', 'J', 'H' or 'K'
 
     Returns
     -------
@@ -151,16 +153,35 @@ def extract_spectra(file_name, return_data=False, dir_name='./', name=None):
         K_spectra = extract_spectrum(file_name, 'K', return_data=return_data, dir_name=dir_name)
         return [H_spectra, K_spectra]
     else:
-        # print("Can't find mentiond band in the UPPER string of the header of the file.")
+        print("Can't find mentiond band in the UPPER string of the header of the file.")
         sys.exit(1)
 
 
-def get_magnitudes(hip_id, catalogue='~/Documents/SAI/atm-tran/transmittance/A0V.csv'):
-    cat = pd.read_csv(catalogue, sep='\s+')
-    hip_id = str(hip_id).lower()
-    if hip_id.isnumeric():
+def get_magnitudes(hip_id, catalogue='A0V.csv'):
+    """Get J, H and K magnitudes from the mentioned catalogue.
+
+    It's highly recomended to use telluric standarts catalogue from
+    the author's github repo:
+    https://github.com/CosmicHitchhiker/transmittance/blob/master/A0V.csv
+
+    Parameters
+    ----------
+    hip_id : string or int
+        Id of the star in HIPPARCOS catalogue
+    catalogue: string, optional
+        Path to the catalogue file
+
+    Returns
+    -------
+    magnitudes : dictionary
+        Dictionary with the band names ('J', 'H', 'K') as keys and
+        corresponding magnitudes as values
+    """
+    cat = pd.read_csv(catalogue, sep='\s+')  # read catalogue in pandas dataframe
+    hip_id = str(hip_id).lower()   # format of star name in catalogue is 'hip<NUMBER'
+    if hip_id.isnumeric():      # if ony humber is given, make it 'hip<NUMBER>'
         hip_id = 'hip' + hip_id
-    star = cat.loc[cat['HIP_ID_STR'] == hip_id]
+    star = cat.loc[cat['HIP_ID_STR'] == hip_id]     # find star in catalogue
     magnitudes = {'J': star['FLUX_J'].values[0], 'H': star['FLUX_H'].values[0],
                   'K': star['FLUX_K'].values[0]}
     return magnitudes
