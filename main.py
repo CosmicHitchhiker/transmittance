@@ -145,12 +145,12 @@ def extract_spectra(file_name):
     """
     data_header = fits.getheader(file_name)
     if data_header['UPPER'].count('YJ'):
-        Y_spectra = extract_spectrum(file_name, 'Y', return_data=return_data, dir_name=dir_name)
-        J_spectra = extract_spectrum(file_name, 'J', return_data=return_data, dir_name=dir_name)
+        Y_spectra = extract_spectrum(file_name, 'Y', return_data=False)
+        J_spectra = extract_spectrum(file_name, 'J', return_data=False)
         return [Y_spectra, J_spectra]
     elif data_header['UPPER'].count('HK'):
-        H_spectra = extract_spectrum(file_name, 'H', return_data=return_data, dir_name=dir_name)
-        K_spectra = extract_spectrum(file_name, 'K', return_data=return_data, dir_name=dir_name)
+        H_spectra = extract_spectrum(file_name, 'H', return_data=False)
+        K_spectra = extract_spectrum(file_name, 'K', return_data=False)
         return [H_spectra, K_spectra]
     else:
         print("Can't find mentiond band in the UPPER string of the header of the file.")
@@ -187,7 +187,36 @@ def get_magnitudes(hip_id, catalogue='A0V.csv'):
     return magnitudes
 
 
-def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=None):
+def clean_spectrum(spec_name, sky_name, return_data=False, dir_name='./'):
+    """Subtract sky spectrum, remove noise, normalize strar specrum
+
+    Open mentioned sky and star spectra, subtract sky from sky spectrum.
+    Fix some bugs (negative values), then apply median and wiener filter
+    to the given data. Take magnitude for the band mentioned in header (because
+    of lack of Y magnitude in catalogue, it's set to J magnitude) and transform
+    flux as it would be star of 5th magnitude. Then cut spectrum to the band
+    borders.
+
+    Parameters
+    ----------
+    spec_name : string
+        Path to star spectrum (assuming that it's in fits-table format)
+    sky_name : string
+        Path to sky spectrum
+    return_data : bool, optional
+        If True, return the resulting spectrum instead of writing into file.
+    dir_name : string, optional
+        Name of directory to write result in. Default is './'
+
+    Returns
+    -------
+    specrum : ndarray
+        First row is an array of wavelenghts, second is an array of
+        fluxes corresponded to each wavelenght. (Returned when return_data
+        is True)
+    name : string
+        Name of generated fits file. (Returned when return_data is False)
+    """
     # Borders for every band
     Y_band = [0.95, 1.3]
     J_band = [1.15, 1.35]
@@ -235,7 +264,25 @@ def clear_spectrum(spec_name, sky_name, return_data=False, dir_name='./', name=N
         return name
 
 
-def clear_spectra(list_of_names):
+def clean_spectra(list_of_names):
+    """ Apply clean_spectrum to every star in the given files.
+
+    Assume that in the given list of names the number of
+    sky spectra and star spectra is equal, and the only difference is the
+    word SKY in the names of sky spectra. Separate sky and stars and apply
+    clean_spectrum to the sorted list of sky and stars spectra names.
+
+    Parameters
+    ----------
+    list_of_names : list of strings
+        List with the filenames of all necessary spectra (both sky and star)
+
+    Returns
+    -------
+    res : list of strings
+        List with filenames of resulting clear spectra
+    """
+
     all = set(list_of_names)        # Names of both sky and stars spectra
     r = re.compile('.*SKY.*')
     sky = set(filter(r.match, list_of_names))   # Only names of sky spectra
@@ -243,81 +290,121 @@ def clear_spectra(list_of_names):
     sky = list(sky)
     stars.sort()        # Sort both of name lists
     sky.sort()          # To make index of sky and star specrum of same object (in same band)
-    res = list(map(clear_spectrum, stars, sky))     # Get clean spectrum for every star in every band
+    res = list(map(clean_spectrum, stars, sky))     # Get clear spectrum for every star in every band
     return res
 
 
 def airmass(zt):
+    """Calculate airmass on the given coaltitude (zenith distance)
+
+    Parameters
+    ----------
+    zt : float
+        Coaltitude
+
+    Returns
+    -------
+    airmass : float
+        Calculated airmass
+    """
     c = np.cos(np.radians(zt))
     k = [1.002432, 0.148386, 0.0096467, 0.149864, 0.0102963, 0.000303978]
     return ((k[0] * c ** 2 + k[1] * c + k[2]) / (c ** 3 + k[3] * c ** 2 + k[4] * c + k[5]))
 
 
-def corr2(a, b, mmv=10):
-    ''' len(a) shouldn't be less than len(b) '''
-    b = b[mmv: -mmv]
-    move = np.argmax(np.correlate(a, b))
-    return move
+def transmittance(data, M):
+    """Calculate transmittance for every wavelenght in given data.
 
+    See "theory" section in the documentation for explanation of this function.
 
-def max_corr(data, mv=10):
-    ''' Returns corellated data, number of reference line and ref movement
-        data - 1-D lines of numbers (y-values with the same x[0])
-        mv - maximum movement, every line will loose at least 2*mmv elemets
-    '''
+    Parameters
+    ----------
+    data : 2D list or ndarray
+        array of fluxes of every star
+    M : 1D list or ndarray
+        array of airmasses of every star
 
-    len_data = list(map(len, data))     # Делаем массив длин
-    print("len:" + str(len_data))
-    i_ref = np.argmax(len_data)         # Получаем номер опорного массива (с наибольшим количеством) элементов
-    ref_data = data[i_ref]
-    del data[i_ref]
-    move = np.array(list(map(lambda x: corr2(ref_data, x, mmv=mv), data)))
-    ref_move = np.max(move)
-    move = (move * (-1) + ref_move).tolist()
-    data = list(map(lambda x: x[mv:-mv], data))
-    data.insert(i_ref, ref_data)
-    move.insert(i_ref, ref_move)
-    data = list(map(lambda x, y: x[y:], data, move))
-    max_len = np.min(list(map(len, data)))
-    data = np.array(list(map(lambda x: x[:max_len], data)))
-    return data, i_ref, ref_move
-
-
-def transmission(data, M):
-    data = np.log((data / data[0])[1:])
-    M = np.array([(M - M[0])[1:]])
-    k = np.linalg.lstsq(M.T, data, rcond=None)[0]
+    Returns
+    -------
+    k : ndarray
+        optical depth in zenith for every wavelenght
+    """
+    data = np.log((data / data[0])[1:])     # Left part of linear equation
+    M = np.array([(M - M[0])[1:]])          # Right part of linear equation
+    k = np.linalg.lstsq(M.T, data, rcond=None)[0]   # Solution of equation
     return k
 
 
-def get_transmittance(args):
+def get_transmittance(filenames):
+    """Calculate transmittance in one band.
+
+    Load spectra from fits files, calculate airmass (get altitude from header)
+    and calculate transmittance for every wavelenght.
+
+    Parameters
+    ----------
+    filenames : list of strings
+        Names of files with clear stars spectra
+
+    Returns
+    -------
+    2D ndarray
+        first row is wavelenghts, second is transmittance
+    """
     # Load all spectra
-    all_data = list(map(lambda x: fits.open(x)[1], args))
-    data = list(map(lambda x: x.data.field(1), all_data))
-    # Cut all spectra to universal beginning
-    # data, i_ref, ref_move = max_corr(data)
-    # wl = (all_data[i_ref].data.field(0))[ref_move: np.shape(data)[1] + ref_move]
-    wl = all_data[0].data.field(0)
-    h = np.array(list(map(lambda x: x.header['CURALT'], all_data)))
-    M = airmass(90 - h)
-    p = np.exp(transmission(data, M)).T
+    all_data = list(map(lambda x: fits.open(x)[1], filenames))
+    data = list(map(lambda x: x.data.field(1), all_data))  # Flux arrays of every star
+    wl = all_data[0].data.field(0)      # Wavelenghts (should be equal for all stars)
+    h = np.array(list(map(lambda x: x.header['CURALT'], all_data)))  # Altitudes
+    M = airmass(90 - h)     # Airmasses
+    p = np.exp(transmittance(data, M)).T        # Transmittance
     return(np.array([wl, p.flatten()]))
 
 
-def get_all_transmittance(filenames):
-    r = re.compile('.*_Y_.*')
-    Y = get_transmittance(list(filter(r.match, filenames)))
-    r = re.compile('.*_J_.*')
-    J = get_transmittance(list(filter(r.match, filenames)))
-    r = re.compile('.*_H_.*')
-    H = get_transmittance(list(filter(r.match, filenames)))
-    r = re.compile('.*_K_.*')
-    K = get_transmittance(list(filter(r.match, filenames)))
-    a = list(map(lambda x: plt.plot(x[0], x[1]), [Y, J, H, K]))
-    plt.show()
+def get_all_transmittance(filenames, plot=True, save=True, dir_name='./'):
+    """Calculate transmittance in all bands.
+
+    Just apply get_transmittance to all band one-by-one.
+
+    Parameters
+    ----------
+    filenames : list of strings
+        Names of files with clear stars spectra
+    plot : bool, optional
+        if True, transmittance will be plotted
+    save : bool, optional
+        if True, results will be saved in fits tables
+    dir_name : string, optional
+        where to save the files
+
+    Returns
+    -------
+    names : list of names
+        names of saved files (only if 'save' is True)
+    """
+    res = dict.fromkeys(['Y', 'J', 'H', 'K'])
+    for band in res.keys():
+        r = re.compile('.*_' + band + '_.*')
+        res[band] = get_transmittance(list(filter(r.match, filenames)))
+
+    if plot:
+        a = list(map(lambda x, y: plt.plot(x[0], x[1], label=y), res.values(), res.keys()))
+        plt.legend()
+        plt.show()
+    if save:
+        names = []
+        for band in res.keys():
+            print(res[band])
+            table = Table(np.array(res[band]).T, names=('wavelenght', 'transmittance'))
+            name = band + '_TRANSMITTANCE.fits'
+            fits.BinTableHDU(data=table).writeto(dir_name + name, overwrite=True)
+            names.append(name)
+        return names
 
 
 def main(args):
+    """First argument is the name of directory with raw fits files"""
+
     # Take all "fts" files from the mentioned directory
     files = glob.glob(sys.argv[1] + "*.fts")
     # We do not need last 4 parts of name
@@ -332,11 +419,11 @@ def main(args):
     # print(spectra)
 
     # Remove noise, sky and normalize spectra
-    clean = clear_spectra(spectra)
-    # print(clean)
+    clear = clean_spectra(spectra)
+    # print(clear)
 
     # Get transmittance for every band
-    get_all_transmittance(clean)
+    get_all_transmittance(clear)
     return 0
 
 
